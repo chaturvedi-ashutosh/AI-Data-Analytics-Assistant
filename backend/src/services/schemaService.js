@@ -1,4 +1,13 @@
 import { pool } from '../db/pool.js'
+import { approvedAnalyticsTables } from '../config/analyticsSchema.js'
+
+export const businessDefinitions = {
+  'orders.total_amount': 'Order total stored on the order; seed values equal the sum of its item line totals.',
+  'order_items.line_total': 'Generated quantity multiplied by the item unit_price.',
+  'order_items.unit_price': 'Unit price captured for the product at the time of the order.',
+  'orders.status': 'One of pending, processing, shipped, completed, cancelled, or refunded.',
+  revenue: 'For product sales, sum order_items.line_total. State any order-status exclusions explicitly; do not silently exclude statuses.',
+}
 
 export async function getSchema(schemaName = 'public') {
   const [tableResult, columnResult, foreignKeyResult] = await Promise.all([
@@ -6,8 +15,11 @@ export async function getSchema(schemaName = 'public') {
       `SELECT table_name AS name
        FROM information_schema.tables
        WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+         AND table_name = ANY($2::text[])
+         AND (has_table_privilege(current_user, format('%I.%I', table_schema, table_name), 'SELECT')
+           OR has_any_column_privilege(current_user, format('%I.%I', table_schema, table_name), 'SELECT'))
        ORDER BY table_name`,
-      [schemaName],
+      [schemaName, approvedAnalyticsTables],
     ),
     pool.query(
       `SELECT
@@ -34,8 +46,9 @@ export async function getSchema(schemaName = 'public') {
          ) AS primary_key
        FROM information_schema.columns AS columns
        WHERE columns.table_schema = $1
+         AND columns.table_name = ANY($2::text[])
        ORDER BY columns.table_name, columns.ordinal_position`,
-      [schemaName],
+      [schemaName, approvedAnalyticsTables],
     ),
     pool.query(
        `SELECT
@@ -63,8 +76,10 @@ export async function getSchema(schemaName = 'public') {
         AND target_column.attnum = target_key.attnum
        WHERE constraint_details.contype = 'f'
          AND source_schema.nspname = $1
+         AND source_table.relname = ANY($2::text[])
+         AND target_table.relname = ANY($2::text[])
        ORDER BY source_table.relname, source_key.position`,
-      [schemaName],
+      [schemaName, approvedAnalyticsTables],
     ),
   ])
 
@@ -93,4 +108,26 @@ export async function getSchema(schemaName = 'public') {
   }
 
   return [...tables.values()]
+}
+
+export async function getSchemaContext(schemaName = 'public') {
+  const tables = await getSchema(schemaName)
+  return {
+    schemaName,
+    tables: tables.map((table) => ({
+      ...table,
+      businessDefinitions: Object.fromEntries(
+        table.columns.flatMap(({ name }) => {
+          const definition = businessDefinitions[`${table.name}.${name}`]
+          return definition ? [[name, definition]] : []
+        }),
+      ),
+    })),
+    relationships: tables.flatMap((table) => table.foreignKeys.map((key) => ({
+      from: `${table.name}.${key.column}`,
+      to: `${key.referencedTable}.${key.referencedColumn}`,
+      constraint: key.name,
+    }))),
+    definitions: { revenue: businessDefinitions.revenue },
+  }
 }

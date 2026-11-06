@@ -1,12 +1,12 @@
 # AI-Powered Data Analytics Assistant
 
-Part 1 establishes a PostgreSQL-backed Express API and a React dashboard that checks the API and displays database schema metadata. LLM-based SQL generation and query execution are intentionally left for later parts.
+Part 1 establishes the PostgreSQL-backed Express API and React dashboard. Part 2 adds local Ollama-based SQL generation. Part 3 validates generated SQL and executes approved analytics queries in a PostgreSQL read-only transaction using a restricted database role.
 
 ## Requirements
 
 - Node.js 20 or newer and npm
 - PostgreSQL 14 or newer, with `psql` available in the terminal
-- Ollama is installed separately for a later implementation part; it is not used by this foundation
+- Ollama installed locally, with the configured model pulled (`ollama pull qwen2.5-coder:7b`)
 
 ## Project structure
 
@@ -17,8 +17,8 @@ backend/
   src/controllers/        HTTP request/response handlers
   src/db/                 PostgreSQL connection pool
   src/middleware/         Async errors, request validation, and error responses
-  src/routes/             Health and schema API routes
-  src/services/           PostgreSQL schema introspection
+  src/routes/             Health, schema, and SQL-generation API routes
+  src/services/           Schema, prompt, Ollama, SQL parsing, and generation modules
   .env.example            Application environment template
 frontend/
   src/components/         Dashboard building blocks
@@ -61,7 +61,7 @@ The seed is repeatable. It creates five regions, twelve customers, ten products,
 Run the schema file before the seed file. Both are repeatable and contain plain SQL suitable for pgAdmin’s Query Tool.
 After seeding, expect 5 regions, 12 customers, 10 products, 21 orders, and 38 order items.
 
-Create `analytics_user` under **Login/Group Roles** in pgAdmin and set its password there. Then open Query Tool for `analytics_db` as the database owner/admin, open `backend/db/sql/03_readonly_role.sql`, and execute it with **F5**. The SQL script grants `SELECT` access, sets read-only transactions and a statement timeout, and does not change the role password. The application never uses the administrative account.
+Create `analytics_user` under **Login/Group Roles** in pgAdmin and set its password there. Then open Query Tool for `analytics_db` as the database owner/admin, open `backend/db/sql/03_readonly_role.sql`, and execute it with **F5**. Run this updated script again if the role was configured earlier: it removes previous broad grants, gives column-limited customer access (excluding names and email), sets connection and statement limits, and enables read-only transactions. The script does not change the role password. The application never uses the administrative account.
 
 ## Configure the backend
 
@@ -105,6 +105,10 @@ Checks the Express API and PostgreSQL connection. Returns `200` when both are he
 
 Returns the tables, columns, PostgreSQL types, nullability, defaults, primary-key flags, and foreign-key relationships in the `public` schema. The optional `schema` query parameter is validated and only accepts `public`.
 
+### `POST /api/analyze`
+
+Accepts `{"question":"Which products generated the highest revenue?"}`. On success, returns the question, SQL, explanation, result column names, up to 500 rows, a truncation flag, execution time in milliseconds, and `status: "success"`. Validation failures return HTTP 422 with `status: "rejected"` and do not execute the query.
+
 ## Verify the connection and API
 
 With PostgreSQL configured and both apps running, use PowerShell:
@@ -114,9 +118,50 @@ Invoke-RestMethod http://localhost:3000/api/health
 Invoke-RestMethod http://localhost:3000/api/schema
 ```
 
-Or open the frontend and check the API/database status and discovered tables in the dashboard. The question composer is a UI placeholder in Part 1; it does not generate SQL or execute queries yet.
+Or open the frontend and check the API/database status and discovered tables in the dashboard. The question composer sends questions to `POST /api/analyze`, which validates and executes approved SQL using the read-only role; the dashboard displays the SQL and bounded result rows.
 
-To check the PostgreSQL credentials in `backend/.env` independently, run `npm --prefix backend run test:db` from the project root. The check reports the connected database, whether the session is read-only, whether it uses `analytics_user`, and the current sample-table row counts.
+## Generate SQL with Ollama
+
+Copy the updated `backend/.env.example` settings into `backend/.env` (or add them to the existing file) and configure `OLLAMA_HOST`, `OLLAMA_MODEL`, timeout, temperature, and context size as needed. The defaults use `http://127.0.0.1:11434` and `qwen2.5-coder:7b`. Keep the local `.env` private; no API key is required for local Ollama.
+
+Start Ollama and confirm the model is installed:
+
+```powershell
+ollama list
+```
+
+With the backend running, submit a question in the dashboard or call:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:3000/api/analyze -ContentType 'application/json' -Body '{"question":"Which products generated the highest revenue?"}'
+```
+
+Example response:
+
+```json
+{
+  "question": "Which products generated the highest revenue?",
+  "sql": "SELECT p.name, SUM(oi.line_total) AS revenue FROM products AS p JOIN order_items AS oi ON oi.product_id = p.id GROUP BY p.name ORDER BY revenue DESC LIMIT 10",
+  "explanation": "Ranks products by the sum of their order line totals.",
+  "columns": ["name", "revenue"],
+  "rows": [{"name": "27-inch Monitor", "revenue": "1395.00"}],
+  "truncated": false,
+  "executionTime": 18,
+  "status": "success"
+}
+```
+
+Ambiguous questions return `status: "clarification_needed"`, `sql: null`, and a brief clarification. Rejected SQL returns HTTP 422 with `status: "rejected"`; it is logged and never reaches PostgreSQL. The validator parses PostgreSQL SQL, checks approved tables and columns, safe functions, read-only CTEs and FK joins, and rejects multiple statements. Execution adds a maximum row count, uses a five-second statement timeout, verifies the connected role, and runs inside `BEGIN READ ONLY` / `COMMIT`. The database role independently denies writes and cannot read customer names or email addresses. The LLM has no database connection or execution tool.
+
+## SQL generation tests
+
+Run the SQL validator checks for selects, joins, grouping, subqueries, CTEs, DML/DDL, multiple statements, unauthorized tables and columns, dangerous functions, malformed SQL, and length limits:
+
+```powershell
+npm --prefix backend test
+```
+
+To verify the PostgreSQL role and database-level write protections, run `npm --prefix backend run test:db` from the project root after applying `03_readonly_role.sql`. It checks the analytics role, private customer columns, sample rows, and attempts safe no-row INSERT/UPDATE/DELETE statements that must be denied by PostgreSQL.
 
 ## Module responsibilities
 
@@ -124,10 +169,14 @@ To check the PostgreSQL credentials in `backend/.env` independently, run `npm --
 - `backend/src/app.js` configures security headers, CORS, JSON parsing, API routes, and centralized errors.
 - `backend/src/db/pool.js` owns the PostgreSQL connection pool and connection check.
 - `backend/src/controllers/` turns route requests into API responses.
-- `backend/src/routes/` defines health and validated schema endpoints.
-- `backend/src/services/schemaService.js` reads table, column, key, and relationship metadata from PostgreSQL.
+- `backend/src/routes/` defines health, schema, and validated analytics endpoints.
+- `backend/src/services/schemaService.js` reads table, column, key, and relationship metadata from PostgreSQL and adds business definitions for prompts.
 - `backend/src/middleware/` handles async errors and validates request query parameters.
 - `backend/db/sql/` contains database creation, schema/index, sample-data, and read-only-role setup scripts.
 - `frontend/src/services/analyticsApi.js` calls the backend API.
 - `frontend/src/components/` contains dashboard pieces; `frontend/src/App.jsx` composes them and loads API/schema status.
-- `backend/src/services/llmService.js` is an existing Ollama helper and is not connected to Part 1 routes.
+- `backend/src/services/llmService.js` calls the configured local Ollama model with a timeout; `promptService.js` builds schema-aware instructions.
+- `backend/src/services/sqlGenerationService.js` loads PostgreSQL schema metadata and obtains structured SQL from the model; model output remains untrusted.
+- `backend/src/services/sqlValidator.js` parses PostgreSQL SQL and checks statement types, approved schema, columns, functions, CTEs, and join relationships.
+- `backend/src/services/queryService.js` verifies the database role, sets a transaction-local timeout, executes in a read-only transaction, and caps returned rows.
+- `backend/src/controllers/analytics.controller.js` and `backend/src/routes/analytics.routes.js` implement `POST /api/analyze`, including rejection logging and the generation/validation/execution flow.

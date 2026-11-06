@@ -10,7 +10,7 @@ function check(condition, description) {
 
 const expectedColumns = {
   regions: ['id', 'name', 'created_at'],
-  customers: ['id', 'full_name', 'email', 'region_id', 'signup_date', 'created_at'],
+  customers: ['id', 'region_id', 'signup_date', 'created_at'],
   products: ['id', 'name', 'category', 'unit_price', 'active', 'created_at'],
   orders: ['id', 'customer_id', 'order_date', 'status', 'total_amount', 'created_at'],
   order_items: ['id', 'order_id', 'product_id', 'quantity', 'unit_price', 'line_total'],
@@ -49,6 +49,8 @@ try {
        current_setting('transaction_read_only') = 'on' AS default_read_only,
        current_user = 'analytics_user' AS is_analytics_user,
        roles.rolsuper AS superuser,
+       roles.rolcreatedb AS can_create_database,
+       roles.rolcreaterole AS can_create_roles,
        has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_in_public
      FROM pg_roles AS roles
      WHERE roles.rolname = current_user`,
@@ -60,6 +62,8 @@ try {
   check(role?.is_analytics_user === true, 'connected as analytics_user')
   check(role?.default_read_only === true, 'new sessions are read-only by default')
   check(role?.superuser === false, 'application role is not a superuser')
+  check(role?.can_create_database === false, 'application role cannot create databases')
+  check(role?.can_create_roles === false, 'application role cannot create roles')
   check(role?.can_create_in_public === false, 'application role cannot create objects in public')
 
   const columnsResult = await pool.query(
@@ -152,7 +156,36 @@ try {
     check(access.can_insert === false, 'application role cannot insert rows')
     check(access.can_update === false, 'application role cannot update rows')
     check(access.can_delete === false, 'application role cannot delete rows')
+
+    const deniedWrites = [
+      ['INSERT INTO orders (customer_id, order_date, status, total_amount) SELECT id, CURRENT_DATE, \'pending\', 0 FROM customers WHERE FALSE', 'database blocks INSERT independently of app validation'],
+      ['UPDATE orders SET status = status WHERE FALSE', 'database blocks UPDATE independently of app validation'],
+      ['DELETE FROM orders WHERE FALSE', 'database blocks DELETE independently of app validation'],
+    ]
+    const client = await pool.connect()
+    try {
+      for (const [sql, description] of deniedWrites) {
+        await client.query('BEGIN')
+        try {
+          await client.query(sql)
+          check(false, description)
+        } catch (error) {
+          check(['25006', '42501'].includes(error.code), description)
+        } finally {
+          await client.query('ROLLBACK')
+        }
+      }
+    } finally {
+      client.release()
+    }
   }
+
+  const customerPrivacy = await pool.query(
+    `SELECT has_column_privilege('analytics_user', 'public.customers', 'full_name', 'SELECT') AS can_read_name,
+            has_column_privilege('analytics_user', 'public.customers', 'email', 'SELECT') AS can_read_email`,
+  )
+  check(customerPrivacy.rows[0].can_read_name === false, 'application role cannot read customer names')
+  check(customerPrivacy.rows[0].can_read_email === false, 'application role cannot read customer email addresses')
 } catch (error) {
   console.error('Database verification could not complete:', error.message)
   process.exitCode = 1

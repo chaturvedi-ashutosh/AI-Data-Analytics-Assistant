@@ -3,6 +3,7 @@ import express from 'express'
 import helmet from 'helmet'
 import healthRouter from './routes/health.js'
 import schemaRouter from './routes/schema.js'
+import analyticsRouter from './routes/analytics.routes.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { config } from './config/env.js'
 
@@ -18,6 +19,7 @@ app.get('/api', (_request, response) => {
 
 app.use('/api/health', healthRouter)
 app.use('/api/schema', schemaRouter)
+app.use('/api/analyze', analyticsRouter)
 
 app.use((_request, response) => {
   response.status(404).json({ status: 'error', message: 'Route not found' })

@@ -20,3 +20,14 @@ export function getHealth() {
 export function getSchema() {
   return getJson('/api/schema')
 }
+
+export async function analyzeQuestion(question) {
+  const response = await fetch(`${API_BASE_URL}/api/analyze`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  })
+  const payload = await response.json()
+  if (!response.ok) throw new Error(payload.message || `Request failed with status ${response.status}`)
+  return payload
+}

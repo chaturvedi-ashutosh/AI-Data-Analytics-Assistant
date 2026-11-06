@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Activity, ArrowDownRight, ArrowUpRight, Clock3, Database, Layers3 } from 'lucide-react'
-import { getHealth, getSchema } from './services/analyticsApi.js'
+import { analyzeQuestion, getHealth, getSchema } from './services/analyticsApi.js'
 import QuestionComposer from './components/QuestionComposer.jsx'
 import SchemaOverview from './components/SchemaOverview.jsx'
 import Sidebar from './components/Sidebar.jsx'
@@ -40,6 +40,9 @@ export default function App() {
   const [schemaError, setSchemaError] = useState('')
   const [question, setQuestion] = useState('')
   const [submittedQuestion, setSubmittedQuestion] = useState('')
+  const [analysis, setAnalysis] = useState(null)
+  const [analysisError, setAnalysisError] = useState('')
+  const [analysisLoading, setAnalysisLoading] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -66,10 +69,21 @@ export default function App() {
     year: 'numeric',
   }).format(new Date())
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault()
     const normalizedQuestion = question.trim()
-    if (normalizedQuestion) setSubmittedQuestion(normalizedQuestion)
+    if (!normalizedQuestion || analysisLoading) return
+    setSubmittedQuestion(normalizedQuestion)
+    setAnalysis(null)
+    setAnalysisError('')
+    setAnalysisLoading(true)
+    try {
+      setAnalysis(await analyzeQuestion(normalizedQuestion))
+    } catch (error) {
+      setAnalysisError(error.message)
+    } finally {
+      setAnalysisLoading(false)
+    }
   }
 
   return (
@@ -119,11 +133,16 @@ export default function App() {
                   <p className="text-sm font-semibold text-slate-900">Ask your data</p>
                   <p className="mt-1 text-xs leading-5 text-slate-500">Use a plain-language question to explore your business metrics.</p>
                 </div>
-                <QuestionComposer value={question} onChange={setQuestion} onSubmit={handleSubmit} />
-                {submittedQuestion && (
-                  <p className="mt-3 rounded-lg bg-indigo-50 px-3 py-2 text-xs leading-5 text-indigo-800" role="status">
-                    “{submittedQuestion}” is ready. Query analysis will be enabled in a later implementation part.
-                  </p>
+                <QuestionComposer value={question} onChange={setQuestion} onSubmit={handleSubmit} loading={analysisLoading} />
+                {analysisLoading && <p className="mt-3 text-sm text-indigo-700" role="status">Generating SQL with the configured local model…</p>}
+                {analysisError && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" role="alert">{analysisError}</p>}
+                {analysis && (
+                  <div className="mt-3 space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
+                    <p className="text-xs font-medium text-indigo-900">{analysis.status === 'clarification_needed' ? 'Clarification needed' : 'Query complete'} · “{submittedQuestion}”</p>
+                    <p className="text-sm leading-6 text-slate-700">{analysis.explanation}</p>
+                    {analysis.sql && <pre className="overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-emerald-100"><code>{analysis.sql}</code></pre>}
+                    {analysis.status === 'success' && <p className="text-[11px] text-slate-500">Executed using a read-only database role in {analysis.executionTime} ms.</p>}
+                  </div>
                 )}
               </section>
 
@@ -133,19 +152,29 @@ export default function App() {
                     <h3 className="text-sm font-semibold text-slate-900">Results workspace</h3>
                     <p className="mt-1 text-xs text-slate-500">Query results and visualizations will appear here.</p>
                   </div>
-                  <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">No query yet</span>
+                  <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">{analysis?.status === 'success' ? `${analysis.rows.length}${analysis.truncated ? '+' : ''} rows` : 'No query yet'}</span>
                 </div>
-                <div className="mt-5 grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
+                {analysis?.status === 'success' ? (
+                  analysis.rows.length ? (
+                    <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
+                      <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500"><tr>{analysis.columns.map((column) => <th className="px-4 py-3 font-semibold" key={column}>{column}</th>)}</tr></thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">{analysis.rows.map((row, index) => <tr key={index}>{analysis.columns.map((column) => <td className="max-w-64 px-4 py-3 text-slate-700" key={column}>{row[column] == null ? '—' : String(row[column])}</td>)}</tr>)}</tbody>
+                      </table>
+                      {analysis.truncated && <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">Showing the first 500 rows.</p>}
+                    </div>
+                  ) : <div className="mt-5 grid min-h-40 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center text-sm text-slate-500">The query returned no rows.</div>
+                ) : <div className="mt-5 grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
                   <div>
                     <span className="mx-auto grid size-11 place-items-center rounded-2xl bg-white text-indigo-500 shadow-sm">
                       <Activity size={20} />
                     </span>
                     <p className="mt-3 text-sm font-medium text-slate-700">Your analysis will show up here</p>
                     <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">
-                      The database and API foundation is being connected. Query generation and charts are planned for a later part.
+                      Generated SQL appears above. Query execution and visualizations are not enabled yet.
                     </p>
                   </div>
-                </div>
+                </div>}
               </section>
             </div>
 
