@@ -1,31 +1,24 @@
-import { useEffect, useState } from 'react'
-import { Activity, ArrowDownRight, ArrowUpRight, Clock3, Database, Layers3 } from 'lucide-react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { Activity, ArrowRight, Database, Layers3, MessageSquareText } from 'lucide-react'
 import { analyzeQuestion, getHealth, getSchema } from './services/analyticsApi.js'
-import QuestionComposer from './components/QuestionComposer.jsx'
+import ChatInput from './components/ChatInput.jsx'
+import ChatMessage from './components/ChatMessage.jsx'
+import DataTable from './components/DataTable.jsx'
+import ErrorMessage from './components/ErrorMessage.jsx'
+import InsightCard from './components/InsightCard.jsx'
+import LoadingIndicator from './components/LoadingIndicator.jsx'
+import RecentQueries from './components/RecentQueries.jsx'
 import SchemaOverview from './components/SchemaOverview.jsx'
 import Sidebar from './components/Sidebar.jsx'
+import SqlViewer from './components/SqlViewer.jsx'
 
-function StatusBadge({ connected }) {
-  return (
-    <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${
-      connected ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'
-    }`}>
-      <span className={`size-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-      {connected ? 'API connected' : 'Connection pending'}
-    </span>
-  )
-}
+const ChartRenderer = lazy(() => import('./components/ChartRenderer.jsx'))
 
-function MetricCard({ label, value, caption, icon: Icon, trend }) {
+function MetricCard({ icon: Icon, label, value, caption }) {
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/40">
-      <div className="flex items-start justify-between">
-        <span className="grid size-9 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
-          <Icon size={17} />
-        </span>
-        {trend && <span className="flex items-center gap-1 text-[11px] font-medium text-slate-400">{trend}</span>}
-      </div>
-      <p className="mt-4 text-xs font-medium text-slate-500">{label}</p>
+    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <span className="grid size-9 place-items-center rounded-xl bg-indigo-50 text-indigo-600"><Icon size={17} /></span>
+      <p className="mt-3 text-xs font-medium text-slate-500">{label}</p>
       <p className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{value}</p>
       <p className="mt-1 text-xs text-slate-400">{caption}</p>
     </article>
@@ -39,168 +32,105 @@ export default function App() {
   const [schemaLoading, setSchemaLoading] = useState(true)
   const [schemaError, setSchemaError] = useState('')
   const [question, setQuestion] = useState('')
-  const [submittedQuestion, setSubmittedQuestion] = useState('')
+  const [conversationId] = useState(() => window.crypto.randomUUID())
+  const [messages, setMessages] = useState([])
   const [analysis, setAnalysis] = useState(null)
   const [analysisError, setAnalysisError] = useState('')
-  const [analysisLoading, setAnalysisLoading] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [recentQueries, setRecentQueries] = useState([])
+  const [resultView, setResultView] = useState('chart')
 
   useEffect(() => {
     let active = true
-
-    getHealth()
-      .then((data) => active && setHealth(data))
-      .catch((error) => active && setHealthError(error.message))
-
-    getSchema()
-      .then((data) => active && setTables(data.tables))
-      .catch((error) => active && setSchemaError(error.message))
-      .finally(() => active && setSchemaLoading(false))
-
-    return () => {
-      active = false
-    }
+    getHealth().then((data) => active && setHealth(data)).catch((error) => active && setHealthError(error.message))
+    getSchema().then((data) => active && setTables(data.tables)).catch((error) => active && setSchemaError(error.message)).finally(() => active && setSchemaLoading(false))
+    return () => { active = false }
   }, [])
 
-  const databaseConnected = health?.services?.database === 'ok'
-  const formattedDate = new Intl.DateTimeFormat('en', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date())
+  async function submitQuestion(event, overrideQuestion = '') {
+    event?.preventDefault()
+    const currentQuestion = (overrideQuestion || question).trim()
+    if (!currentQuestion || loading) return
 
-  async function handleSubmit(event) {
-    event.preventDefault()
-    const normalizedQuestion = question.trim()
-    if (!normalizedQuestion || analysisLoading) return
-    setSubmittedQuestion(normalizedQuestion)
+    setMessages((items) => [...items, { role: 'user', text: currentQuestion, time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) }])
+    setQuestion('')
     setAnalysis(null)
     setAnalysisError('')
-    setAnalysisLoading(true)
+    setLoading(true)
     try {
-      setAnalysis(await analyzeQuestion(normalizedQuestion))
+      const result = await analyzeQuestion(currentQuestion, conversationId)
+      setAnalysis(result)
+      setMessages((items) => [...items, {
+        role: 'assistant',
+        text: result.status === 'clarification_needed' ? result.explanation : result.insight,
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
+      }])
+      setRecentQueries((items) => [{ question: currentQuestion }, ...items.filter((item) => item.question !== currentQuestion)].slice(0, 6))
+      setResultView(result.visualization?.type === 'table' ? 'table' : 'chart')
     } catch (error) {
       setAnalysisError(error.message)
     } finally {
-      setAnalysisLoading(false)
+      setLoading(false)
     }
   }
+
+  const databaseConnected = health?.services?.database === 'ok'
+  const formattedDate = new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }).format(new Date())
 
   return (
     <div className="min-h-screen bg-[#f7f8fc] text-slate-900 md:flex">
       <Sidebar databaseStatus={databaseConnected ? 'connected' : 'pending'} />
-
       <main className="min-w-0 flex-1" id="overview">
-        <header className="flex items-center justify-between border-b border-slate-200/80 bg-white/80 px-5 py-4 backdrop-blur md:px-9">
-          <div>
-            <p className="text-xs font-medium text-slate-400">Workspace / Overview</p>
-            <h1 className="mt-1 text-lg font-semibold tracking-tight">Analytics overview</h1>
-          </div>
-          <StatusBadge connected={Boolean(health && !healthError)} />
+        <header className="flex items-center justify-between border-b border-slate-200/80 bg-white/85 px-5 py-4 backdrop-blur md:px-9">
+          <div><p className="text-xs font-medium text-slate-400">Workspace / Analytics</p><h1 className="mt-1 text-lg font-semibold tracking-tight">Analytics assistant</h1></div>
+          <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ${health && !healthError ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
+            <span className={`size-1.5 rounded-full ${health && !healthError ? 'bg-emerald-500' : 'bg-amber-500'}`} />{health && !healthError ? 'API connected' : 'Connection pending'}
+          </span>
         </header>
 
-        <div className="mx-auto max-w-7xl space-y-7 px-5 py-7 md:px-9 md:py-9">
-          <section className="flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-            <div>
-              <p className="text-sm font-medium text-indigo-600">{formattedDate}</p>
-              <h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Good morning</h2>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
-                Explore your business data with a question. Connect the database to see your schema and get started.
-              </p>
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <Clock3 size={14} /> Live workspace
-            </div>
+        <div className="mx-auto max-w-7xl space-y-6 px-5 py-7 md:px-9 md:py-9">
+          <section className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+            <div><p className="text-sm font-medium text-indigo-600">{formattedDate}</p><h2 className="mt-2 text-3xl font-semibold tracking-tight text-slate-950">Ask a question. Explore the answer.</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">Generate a safe query, inspect its results, and ask follow-up questions in the same conversation.</p></div>
+            <span className="flex items-center gap-2 text-xs text-slate-400"><Activity size={14} /> Read-only analytics</span>
           </section>
 
-          {healthError && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
-              API status unavailable: {healthError}. Start the backend with <code>npm run dev:backend</code>.
-            </div>
-          )}
+          {(healthError || schemaError) && <ErrorMessage message={healthError || schemaError} />}
 
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Analytics metrics">
-            <MetricCard label="Total revenue" value="—" caption="Awaiting connected data" icon={Activity} trend={<><ArrowUpRight size={13} /> —</>} />
-            <MetricCard label="Orders" value="—" caption="No query run yet" icon={Layers3} trend={<><ArrowDownRight size={13} /> —</>} />
-            <MetricCard label="Customers" value="—" caption="No query run yet" icon={Database} />
-            <MetricCard label="Data tables" value={schemaLoading ? '…' : String(tables.length)} caption="Discovered from PostgreSQL" icon={Layers3} />
+          <section className="grid gap-4 sm:grid-cols-3" aria-label="Workspace summary">
+            <MetricCard label="Database" value={databaseConnected ? 'Connected' : 'Pending'} caption="Restricted PostgreSQL role" icon={Database} />
+            <MetricCard label="Analytics tables" value={schemaLoading ? '…' : String(tables.length)} caption="Approved schema objects" icon={Layers3} />
+            <MetricCard label="Questions asked" value={String(messages.filter((message) => message.role === 'user').length)} caption="In this conversation" icon={MessageSquareText} />
           </section>
 
-          <section className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(300px,0.9fr)]">
+          <section className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(290px,0.8fr)]">
             <div className="space-y-5">
-              <section className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-white p-5 md:p-6" id="question">
-                <div className="mb-4">
-                  <p className="text-sm font-semibold text-slate-900">Ask your data</p>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">Use a plain-language question to explore your business metrics.</p>
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm" id="question">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4"><div><h3 className="text-sm font-semibold text-slate-900">Your conversation</h3><p className="mt-1 text-xs text-slate-500">Follow-ups use the last question as context and still pass validation.</p></div><span className="rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-medium text-indigo-700">{messages.filter((message) => message.role === 'user').length} turns</span></div>
+                <div className="max-h-[460px] min-h-36 space-y-4 overflow-y-auto bg-slate-50/60 p-5" aria-live="polite">
+                  {!messages.length && <div className="grid min-h-28 place-items-center text-center"><div><p className="text-sm font-medium text-slate-700">Start with a business question</p><div className="mt-3 flex flex-wrap justify-center gap-2">{['Show monthly revenue', 'Compare order counts by status', 'Which products generated the most revenue?'].map((sample) => <button className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 hover:border-indigo-200 hover:text-indigo-700" key={sample} onClick={() => submitQuestion(null, sample)} type="button">{sample} <ArrowRight className="ml-1 inline" size={12} /></button>)}</div></div></div>}
+                  {messages.map((message, index) => <ChatMessage key={`${index}-${message.time}`} {...message} />)}
+                  {loading && <LoadingIndicator />}
                 </div>
-                <QuestionComposer value={question} onChange={setQuestion} onSubmit={handleSubmit} loading={analysisLoading} />
-                {analysisLoading && <p className="mt-3 text-sm text-indigo-700" role="status">Generating SQL with the configured local model…</p>}
-                {analysisError && <p className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800" role="alert">{analysisError}</p>}
-                {analysis && (
-                  <div className="mt-3 space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/70 p-4">
-                    <p className="text-xs font-medium text-indigo-900">{analysis.status === 'clarification_needed' ? 'Clarification needed' : 'Query complete'} · “{submittedQuestion}”</p>
-                    <p className="text-sm leading-6 text-slate-700">{analysis.explanation}</p>
-                    {analysis.sql && <pre className="overflow-x-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-emerald-100"><code>{analysis.sql}</code></pre>}
-                    {analysis.status === 'success' && <p className="text-[11px] text-slate-500">Executed using a read-only database role in {analysis.executionTime} ms.</p>}
-                  </div>
-                )}
+                <div className="p-4 md:p-5"><ErrorMessage message={analysisError} onDismiss={() => setAnalysisError('')} /><div className={analysisError ? 'mt-3' : ''}><ChatInput value={question} onChange={setQuestion} onSubmit={submitQuestion} loading={loading} /></div></div>
               </section>
 
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/40 md:p-6">
-                <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold text-slate-900">Results workspace</h3>
-                    <p className="mt-1 text-xs text-slate-500">Query results and visualizations will appear here.</p>
-                  </div>
-                  <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-500">{analysis?.status === 'success' ? `${analysis.rows.length}${analysis.truncated ? '+' : ''} rows` : 'No query yet'}</span>
-                </div>
-                {analysis?.status === 'success' ? (
-                  analysis.rows.length ? (
-                    <div className="mt-5 overflow-x-auto rounded-xl border border-slate-200">
-                      <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-500"><tr>{analysis.columns.map((column) => <th className="px-4 py-3 font-semibold" key={column}>{column}</th>)}</tr></thead>
-                        <tbody className="divide-y divide-slate-100 bg-white">{analysis.rows.map((row, index) => <tr key={index}>{analysis.columns.map((column) => <td className="max-w-64 px-4 py-3 text-slate-700" key={column}>{row[column] == null ? '—' : String(row[column])}</td>)}</tr>)}</tbody>
-                      </table>
-                      {analysis.truncated && <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-slate-500">Showing the first 500 rows.</p>}
-                    </div>
-                  ) : <div className="mt-5 grid min-h-40 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center text-sm text-slate-500">The query returned no rows.</div>
-                ) : <div className="mt-5 grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50/70 px-6 text-center">
-                  <div>
-                    <span className="mx-auto grid size-11 place-items-center rounded-2xl bg-white text-indigo-500 shadow-sm">
-                      <Activity size={20} />
-                    </span>
-                    <p className="mt-3 text-sm font-medium text-slate-700">Your analysis will show up here</p>
-                    <p className="mt-1 max-w-sm text-xs leading-5 text-slate-400">
-                      Generated SQL appears above. Query execution and visualizations are not enabled yet.
-                    </p>
-                  </div>
-                </div>}
-              </section>
+              {analysis?.status === 'success' && <>
+                <InsightCard insight={analysis.insight} />
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-sm font-semibold text-slate-900">Query results</h3><p className="mt-1 text-xs text-slate-500">{analysis.rows.length} rows returned in {analysis.executionTime} ms{analysis.truncated ? ' · capped at 500' : ''}</p></div><div className="flex rounded-lg bg-slate-100 p-1" role="tablist" aria-label="Result display"><button className={`rounded-md px-3 py-1.5 text-xs font-medium ${resultView === 'chart' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`} onClick={() => setResultView('chart')} role="tab" aria-selected={resultView === 'chart'} type="button">Visualization</button><button className={`rounded-md px-3 py-1.5 text-xs font-medium ${resultView === 'table' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`} onClick={() => setResultView('table')} role="tab" aria-selected={resultView === 'table'} type="button">Table</button></div></div>
+                  <div className="mt-5">{resultView === 'chart' ? <Suspense fallback={<div className="grid h-64 place-items-center text-sm text-slate-400">Loading visualization…</div>}><ChartRenderer visualization={analysis.visualization} /></Suspense> : <DataTable columns={analysis.columns} rows={analysis.rows} truncated={analysis.truncated} />}</div>
+                  {resultView === 'chart' && analysis.visualization?.type !== 'table' && analysis.rows.length > 1 && <details className="mt-5 border-t border-slate-100 pt-4"><summary className="cursor-pointer text-xs font-semibold text-slate-600">View data table</summary><div className="mt-4"><DataTable columns={analysis.columns} rows={analysis.rows} truncated={analysis.truncated} /></div></details>}
+                </section>
+                <SqlViewer sql={analysis.sql} />
+              </>}
+              {analysis?.status === 'clarification_needed' && <InsightCard insight={analysis.explanation} />}
             </div>
 
-            <div className="space-y-5">
+            <aside className="space-y-5">
               <SchemaOverview tables={tables} loading={schemaLoading} error={schemaError} />
-              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm shadow-slate-200/40">
-                <h3 className="text-sm font-semibold text-slate-900">Connection status</h3>
-                <p className="mt-1 text-xs text-slate-500">Backend and PostgreSQL availability</p>
-                <div className="mt-4 space-y-3">
-                  {[
-                    ['Express API', health?.services?.api === 'ok'],
-                    ['PostgreSQL', health?.services?.database === 'ok'],
-                  ].map(([label, connected]) => (
-                    <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2.5" key={label}>
-                      <span className="text-xs font-medium text-slate-700">{label}</span>
-                      <span className={`text-[11px] font-semibold ${connected ? 'text-emerald-600' : 'text-slate-400'}`}>
-                        {health ? (connected ? 'Connected' : 'Unavailable') : 'Checking…'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                {(healthError || health?.message) && (
-                  <p className="mt-3 text-xs leading-5 text-slate-400">{healthError || health.message}</p>
-                )}
-              </section>
-            </div>
+              <RecentQueries items={recentQueries} onSelect={(value) => setQuestion(value)} />
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><h3 className="text-sm font-semibold text-slate-900">Execution safeguards</h3><ul className="mt-3 space-y-2 text-xs leading-5 text-slate-500"><li>PostgreSQL SQL is parsed and checked against approved tables.</li><li>Queries execute in read-only transactions.</li><li>Results are limited to 500 rows with a statement timeout.</li></ul></section>
+            </aside>
           </section>
         </div>
       </main>

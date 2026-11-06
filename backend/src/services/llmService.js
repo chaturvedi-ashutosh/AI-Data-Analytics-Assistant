@@ -4,11 +4,11 @@ import { buildMessages } from './promptService.js'
 
 const ollama = new Ollama({ host: config.ollamaHost })
 
-export async function requestCompletion(question, schemaContext, { client = ollama } = {}) {
+export async function requestCompletion(question, schemaContext, { client = ollama, conversationContext = null, validationFeedback = null } = {}) {
   try {
     const response = await client.chat({
       model: config.ollamaModel,
-      messages: buildMessages(question, schemaContext),
+      messages: buildMessages(question, schemaContext, conversationContext, validationFeedback),
       format: 'json',
       options: { temperature: config.ollamaTemperature, num_ctx: config.ollamaNumCtx },
       signal: AbortSignal.timeout(config.ollamaTimeoutMs),

@@ -7,7 +7,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test:db": "node src/test-db.js",
-    "test": "node --test src/services/sqlValidator.test.js src/services/queryService.test.js"
+    "test": "node --test src/services/*.test.js"
   },
   "engines": {
     "node": ">=20"

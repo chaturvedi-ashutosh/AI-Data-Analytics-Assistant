@@ -73,6 +73,10 @@ export async function executeAnalyticsQuery(validatedQuery, {
 
     return {
       columns: result.fields.map((field) => field.name),
+      columnMetadata: result.fields.map((field) => ({
+        name: field.name,
+        dataTypeId: field.dataTypeID,
+      })),
       rows: result.rows.slice(0, maxRows),
       truncated: result.rows.length > maxRows,
       executionTime,

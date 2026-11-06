@@ -1,6 +1,6 @@
 # AI-Powered Data Analytics Assistant
 
-Part 1 establishes the PostgreSQL-backed Express API and React dashboard. Part 2 adds local Ollama-based SQL generation. Part 3 validates generated SQL and executes approved analytics queries in a PostgreSQL read-only transaction using a restricted database role.
+Part 1 establishes the PostgreSQL-backed Express API and React dashboard. Part 2 adds local Ollama-based SQL generation. Part 3 validates generated SQL and executes approved analytics queries using a restricted read-only database role. Part 4 analyzes returned rows, chooses a visualization, and presents results in a conversational dashboard.
 
 ## Requirements
 
@@ -18,10 +18,10 @@ backend/
   src/db/                 PostgreSQL connection pool
   src/middleware/         Async errors, request validation, and error responses
   src/routes/             Health, schema, and SQL-generation API routes
-  src/services/           Schema, prompt, Ollama, SQL parsing, and generation modules
+  src/services/           Schema, prompt, Ollama, validation, execution, analysis, visualization, and conversation modules
   .env.example            Application environment template
 frontend/
-  src/components/         Dashboard building blocks
+  src/components/         Chat, results, charts, tables, and dashboard building blocks
   src/services/           Express API client
   src/App.jsx              Initial analytics workspace
   vite.config.js           Tailwind plugin and local API proxy
@@ -107,7 +107,13 @@ Returns the tables, columns, PostgreSQL types, nullability, defaults, primary-ke
 
 ### `POST /api/analyze`
 
-Accepts `{"question":"Which products generated the highest revenue?"}`. On success, returns the question, SQL, explanation, result column names, up to 500 rows, a truncation flag, execution time in milliseconds, and `status: "success"`. Validation failures return HTTP 422 with `status: "rejected"` and do not execute the query.
+Accepts a question and an optional UUID conversation ID:
+
+```json
+{"question":"Show monthly revenue","conversationId":"f83a16cb-3925-40d9-97f6-0ace935e3fb9"}
+```
+
+On success, returns `question`, validated `sql`, `columns`, `columnMetadata`, up to 500 `rows`, `insight`, `visualization`, `truncated`, `executionTime`, and `status: "success"`. Validation failures return HTTP 422 with `status: "rejected"` and do not execute the query. The frontend reuses its conversation ID for follow-ups such as “Now compare it with last year.” The backend retains only the previous question and validated SQL in process memory for up to 30 minutes; a restart clears this context. Context is prompt context only and does not change schema validation or query permissions.
 
 ## Verify the connection and API
 
@@ -145,6 +151,14 @@ Example response:
   "explanation": "Ranks products by the sum of their order line totals.",
   "columns": ["name", "revenue"],
   "rows": [{"name": "27-inch Monitor", "revenue": "1395.00"}],
+  "insight": "Among the returned rows, 27-inch Monitor has the highest revenue (1,395).",
+  "visualization": {
+    "type": "bar",
+    "xAxis": "name",
+    "yAxis": "revenue",
+    "title": "Which products generated the highest revenue?",
+    "data": [{"name": "27-inch Monitor", "revenue": 1395}]
+  },
   "truncated": false,
   "executionTime": 18,
   "status": "success"
@@ -153,9 +167,9 @@ Example response:
 
 Ambiguous questions return `status: "clarification_needed"`, `sql: null`, and a brief clarification. Rejected SQL returns HTTP 422 with `status: "rejected"`; it is logged and never reaches PostgreSQL. The validator parses PostgreSQL SQL, checks approved tables and columns, safe functions, read-only CTEs and FK joins, and rejects multiple statements. Execution adds a maximum row count, uses a five-second statement timeout, verifies the connected role, and runs inside `BEGIN READ ONLY` / `COMMIT`. The database role independently denies writes and cannot read customer names or email addresses. The LLM has no database connection or execution tool.
 
-## SQL generation tests
+## Analytics and security tests
 
-Run the SQL validator checks for selects, joins, grouping, subqueries, CTEs, DML/DDL, multiple statements, unauthorized tables and columns, dangerous functions, malformed SQL, and length limits:
+Run unit and service checks for the complete generate/validate/execute/analyze/visualization flow (with a deterministic generator and executor), follow-up context, empty results, trends, chart selection, role enforcement, row caps, timeouts, unsafe SQL, unauthorized schema, and malformed SQL:
 
 ```powershell
 npm --prefix backend test
