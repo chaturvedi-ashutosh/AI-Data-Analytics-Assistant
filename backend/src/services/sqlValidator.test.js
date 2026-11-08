@@ -32,6 +32,11 @@ test('accepts supported date aggregation', () => {
   assert.doesNotThrow(() => validateSql(query, schema))
 })
 
+test('accepts a read-only calendar-year-to-date filter using CURRENT_DATE', () => {
+  const query = "SELECT TO_CHAR(DATE_TRUNC('month', o.order_date), 'YYYY-MM') AS month, SUM(oi.line_total) AS revenue FROM orders o JOIN order_items oi ON oi.order_id = o.id WHERE o.order_date >= DATE_TRUNC('year', CURRENT_DATE)::date AND o.order_date < CURRENT_DATE + INTERVAL '1 day' GROUP BY DATE_TRUNC('month', o.order_date) ORDER BY month"
+  assert.doesNotThrow(() => validateSql(query, schema))
+})
+
 test('accepts a safe window function and rejects unsupported functions', () => {
   assert.doesNotThrow(() => validateSql('SELECT id, ROW_NUMBER() OVER (ORDER BY order_date) AS sequence FROM orders', schema))
   assert.throws(() => validateSql('SELECT current_setting(\'search_path\') FROM orders', schema), /Function is not approved/)

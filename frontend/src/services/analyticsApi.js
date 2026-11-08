@@ -21,13 +21,19 @@ export function getSchema() {
   return getJson('/api/schema')
 }
 
-export async function analyzeQuestion(question, conversationId) {
+export async function analyzeQuestion(question, conversationId, { signal } = {}) {
   const response = await fetch(`${API_BASE_URL}/api/analyze`, {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({ question, conversationId }),
+    signal,
   })
   const payload = await response.json()
-  if (!response.ok) throw new Error(payload.message || `Request failed with status ${response.status}`)
+  if (!response.ok) {
+    throw Object.assign(new Error(payload.message || `Request failed with status ${response.status}`), {
+      status: response.status,
+      payload,
+    })
+  }
   return payload
 }

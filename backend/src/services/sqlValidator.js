@@ -5,7 +5,7 @@ const { Parser } = parserPackage
 const parser = new Parser()
 const MAX_SQL_LENGTH = 12000
 const SAFE_FUNCTIONS = new Set([
-  'abs', 'avg', 'ceil', 'ceiling', 'char_length', 'coalesce', 'concat', 'count', 'date_part',
+  'abs', 'avg', 'ceil', 'ceiling', 'char_length', 'coalesce', 'concat', 'count', 'current_date', 'date_part',
   'date_trunc', 'floor', 'greatest', 'least', 'length', 'lower', 'max', 'min', 'nullif',
   'round', 'substring', 'sum', 'to_char', 'upper',
 ])

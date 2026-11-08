@@ -2,10 +2,37 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" href="/asklytics-logo.png" />
+    <link rel="apple-touch-icon" href="/asklytics-logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f7f8fc" />
-    <title>AI Analytics Assistant</title>
+    <meta name="theme-color" content="#faf8fb" />
+    <meta name="description" content="Asklytics turns business questions into clear, read-only analytics." />
+    <title>Asklytics | Analytics Assistant</title>
+    <script>
+      try {
+        const savedTheme = localStorage.getItem('asklytics-theme')
+        const mode = ['light', 'dark', 'system'].includes(savedTheme) ? savedTheme : 'system'
+        const accent = ['berry', 'amethyst'].includes(localStorage.getItem('asklytics-accent'))
+          ? localStorage.getItem('asklytics-accent')
+          : 'amethyst'
+        let preferences = {}
+        try {
+          preferences = JSON.parse(localStorage.getItem('asklytics-ui-preferences') || '{}')
+        } catch {
+          preferences = {}
+        }
+        const density = preferences?.density === 'compact' ? 'compact' : 'comfortable'
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        const dark = mode === 'dark' || (mode === 'system' && prefersDark)
+        document.documentElement.classList.toggle('dark', dark)
+        document.documentElement.dataset.theme = mode
+        document.documentElement.dataset.accent = accent
+        document.documentElement.dataset.density = density
+        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+      } catch {
+        // React applies the system theme if local storage is unavailable.
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

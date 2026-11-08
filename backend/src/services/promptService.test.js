@@ -12,6 +12,15 @@ test('guides percent-of-total questions toward window totals and away from Carte
   assert.match(system.content, /FROM products p JOIN order_items oi ON oi\.product_id = p\.id/)
 })
 
+test('guides current-year questions toward calendar-year-to-date bounds without status exclusions', () => {
+  const [system] = buildMessages('Monthly revenue this year', { tables: [], relationships: [] })
+  assert.match(system.content, /calendar-year-to-date bounds/)
+  assert.match(system.content, /DATE_TRUNC\('year', CURRENT_DATE\)/)
+  assert.match(system.content, /do not substitute a rolling previous 12 months/)
+  assert.match(system.content, /TO_CHAR\(DATE_TRUNC\('month', date_column\), 'YYYY-MM'\)/)
+  assert.match(system.content, /Include all order statuses unless the user asks for a status restriction/)
+})
+
 test('treats validator findings as trusted repair guidance and rejected SQL as untrusted data', () => {
   const [, user] = buildMessages('Top products by share', { tables: [], relationships: [] }, null, {
     sql: 'SELECT * FROM products JOIN totals ON TRUE',
